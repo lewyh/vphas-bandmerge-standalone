@@ -11,4 +11,6 @@ setup(
     author='Hywel Farnhill',
     author_email='hywel.farnhill@gmail.com',
     entry_points=entry_points,
+    install_requires=['numpy>=1.9',
+                      'astropy>=0.3']
 )
