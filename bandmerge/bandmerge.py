@@ -3,6 +3,11 @@ import warnings
 import dateutil.parser
 import numpy as np
 from astropy.io import fits
+from datetime import timedelta
+import pkg_resources
+import tempfile
+import subprocess
+import os
 
 __author__ = 'hfarnhill'
 
@@ -11,7 +16,7 @@ def print_colour_warning(message=None):
     print("+----------------------------------------------------------------+")
     if message is not None:
         lenzero = 63 - len(message)
-        print('| {0}{1:<{2}}|'.format(message, ' ', lenzero))
+        print('| {0}{1: <{2}}|'.format(message, ' ', lenzero))
     print("| Please supply EITHER:                                          |")
     print("| * a full or partial set of RED concatenation source lists, OR  |")
     print("| * a full or partial set of BLUE concatenation source lists.    |")
@@ -39,7 +44,10 @@ def runmerge(filelist, radius, aperture):
         table[i]['Filter'] = h["HIERARCH ESO INS FILT1 NAME"].rstrip()
         table[i]['Exp'] = h["HIERARCH ESO TPL EXPNO"]
 
-        obsdate = dateutil.parser.parse(h['DATE'])
+        # If the image was obtained after midnight, adjust date observed to agree with start of night's observations
+        obsdate = dateutil.parser.parse(h['DATE-OBS'])
+        if obsdate.hour < 12:
+            obsdate -= timedelta(days=1)
         table[i]['obsdate'] = "{0}{1:02}{2:02}".format(obsdate.year, obsdate.month, obsdate.day)
 
         # Use fact that OBS NAME follows format "p88vphas_1294_hhna" where first character
@@ -77,14 +85,26 @@ def runmerge(filelist, radius, aperture):
             print_colour_warning("ERROR: Repeated {0}-band pointing source lists".format(filt))
             sys.exit(0)
 
+    # Check that if an Ha image is present, that an r band from the same night is also present (for calibration)
+    if 'NB_659' in table['Filter']:
+        if 'r_SDSS' not in table['Filter']:
+            print_colour_warning("Need Halpha and r-band catalogues from same night.")
+            sys.exit(0)
+        ha_frames = np.where(table['Filter'] == 'NB_659')
+        r_frames = np.where(table['Filter'] == 'r_SDSS')
+        for night in np.unique(table[ha_frames]['obsdate']):
+            if night not in table[r_frames]['obsdate']:
+                print_colour_warning("Need Halpha and r-band catalogues from same night.")
+                sys.exit(0)
+
     for row in table:
         print(
             "Calculating magnitudes from fluxes inside APERTURE {0} for field {1}, filter {2}, exposure {3}.""".format(
                 aperture, row[1], row[3], row[4]))
         single_band(row, aperture)
 
-    # TODO Merge: put together a STILTS command that uses the right column names
-    # TODO Launch a subprocess which runs stilts (check java works first!)
+    merge(table, radius)
+
     # TODO Clean up intermediate files
 
 
@@ -102,7 +122,11 @@ def single_band(fieldinfo, aperture):
         totrows += int(f[ccd].header["naxis2"])
 
     outcols = [59, 60, 61, 58, 55, 63, 64, 65, 66]
-    colnames = ['RA', 'DEC', "Class_{0}_{1}".format(filtnam, expno), "Av_conf_{0}_{1}".format(filtnam, expno),
+    if filtnam == 'r' and expno == 1:
+        coords = ['RA', 'DEC']
+    else:
+        coords = ['RA_{0}_{1}'.format(filtnam, expno), 'DEC_{0}_{1}'.format(filtnam, expno)]
+    colnames = coords + ["Class_{0}_{1}".format(filtnam, expno), "Av_conf_{0}_{1}".format(filtnam, expno),
                 "badpix_{0}_{1}".format(filtnam, expno), "CCD_{0}_{1}".format(filtnam, expno),
                 "OID_{0}_{1}".format(filtnam, expno), "{0}_{1}".format(filtnam, expno),
                 "err_{0}_{1}".format(filtnam, expno)]
@@ -157,6 +181,8 @@ def single_band(fieldinfo, aperture):
     newtab.header["TTYPE5"] = "badpix_{0}_{1}".format(filtnam, expno)
     newtab.data.names[4] = "badpix_{0}_{1}".format(filtnam, expno)
 
+    warnings.filterwarnings('ignore', category=fits.verify.VerifyWarning, append=True)
+
     # copy primary HDU, add file name information and merge with table
     newhdu = fits.PrimaryHDU()
     newhdu.header = f[0].header
@@ -192,11 +218,83 @@ def single_band(fieldinfo, aperture):
     current_module = sys.modules['bandmerge']
     newhdu.header.set("HISTORY", "created with vphas-bandmerge-standalone v" + current_module.__version__)
 
-    warnings.filterwarnings('ignore', category=fits.verify.VerifyWarning, append=True)
     hdulist = fits.HDUList([newhdu, newtab])
     # verify output table and save
     hdulist.writeto(outfn, output_verify='silentfix')
 
+
+def merge(fields, radius):
+    if 'NB_659' in fields['Filter']:
+        zp_shifts = np.zeros((3), dtype=float)
+        ha_frames = np.where(fields['Filter'] == 'NB_659')
+        r_frames = np.where(fields['Filter'] == 'r_SDSS')
+        for i, halpha in enumerate(fields[ha_frames]):
+            obsdate = halpha[2]
+            rband = fields[r_frames][np.where(fields[r_frames]['obsdate'] == obsdate)][0]
+
+            rfits = fits.getheader("{1}_{2}_{3}_{4}.fits".format(*rband), 0)
+            rzp = float(rfits["MAGZPT"])
+
+            hfits = fits.getheader("{1}_{2}_{3}_{4}.fits".format(*halpha), 0)
+            hzp = float(hfits["MAGZPT"])
+
+            zpcorr = rzp - 3.01 - hzp
+            zp_shifts[i] = zpcorr
+
+    stilts = pkg_resources.resource_filename(__name__, "tools/stilts.jar")
+    if fields['concat'][0] == 'red':
+        redpath = pkg_resources.resource_filename(__name__, "tools/red.stilts")
+        tmp = tempfile.NamedTemporaryFile(suffix="_red.stilts")
+        scriptpath = tmp.name
+        tmp.close()
+        f = open(redpath, 'r')
+        redscript = f.readlines()
+        f.close()
+        newscript = open(scriptpath, 'w')
+        for line in redscript:
+            newscript.write(line)
+        newscript.write("replacecol Ha_1 \"Ha_1+{0}\"\n".format(zp_shifts[0]))
+        newscript.write("replacecol Ha_2 \"Ha_2+{0}\"\n".format(zp_shifts[1]))
+        newscript.write("replacecol Ha_3 \"Ha_3+{0}\"\n".format(zp_shifts[2]))
+        newscript.close()
+    else:
+        scriptpath = pkg_resources.resource_filename(__name__, "tools/blue.stilts")
+
+    filters = {'red': ['r_SDSS', 'i_SDSS', 'NB_659'], 'blu': ['r_SDSS', 'u_SDSS', 'g_SDSS']}
+    filternames = {'r_SDSS': 'r', 'i_SDSS':'i', 'NB_659':'Ha', 'u_SDSS':'u', 'g_SDSS':'g'}
+    filtermultiplicity = {'r_SDSS': 2, 'i_SDSS': 2, 'NB_659':3, 'u_SDSS':2, 'g_SDSS':3}
+
+    # Call STILTS
+    # TODO Add command line argument allowing user to specify maximum amount of memory to allocate
+    cmd = ["java", "-Xmx6144M", "-jar", stilts, "tmatchn", "matcher=sky", "params={0}".format(radius),
+           "multimode=group", "nin=7"]
+    i = 1
+    for f in filters[fields['concat'][0]]:
+        print(f)
+        filtname = filternames[f]
+        for expno in range(1, filtermultiplicity[f] + 1):
+            mask = np.where((fields['Filter'] == f) & (fields['Exp'] == expno))
+            if len(fields[mask]) == 0:
+                empty = pkg_resources.resource_filename(__name__, "tools/{0}_{1}_empty.fits".format(f, expno))
+                cmd.append("in{0}={1}".format(i, empty))
+            else:
+                cmd.append("in{0}={2}_{3}_{4}_{5}.fits".format(i, *fields[mask][0]))
+            cmd.append("join{0}=always".format(i))
+            if f == 'r_SDSS' and expno == 1:
+                cmd.append("values{0}=radiansToDegrees(RA) radiansToDegrees(DEC)".format(i))
+            else:
+                cmd.append("values{0}=radiansToDegrees(RA_{1}_{2}) radiansToDegrees(DEC_{1}_{2})".format(i, filtname, expno))
+            i += 1
+    cmd.append("out={0}.fits".format(fields['FieldID'][0]))
+    cmd.append("ocmd=@{0}".format(scriptpath))
+    print cmd
+    subprocess.call(cmd, cwd=os.getcwd())
+    if fields['concat'][0] == 'red':
+        os.remove(scriptpath)
+
+    # TODO Drop empty field files, generate STILTS scripts that only merge total number of exposures.
+    # TODO Test blue filter set
+    # TODO Merge single-band headers and add to merged fits file
 
 def process(args=None):
     import argparse

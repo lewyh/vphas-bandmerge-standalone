@@ -12,5 +12,6 @@ setup(
     author_email='hywel.farnhill@gmail.com',
     entry_points=entry_points,
     install_requires=['numpy>=1.9',
-                      'astropy>=0.3']
+                      'astropy>=0.3'],
+    package_data = {'bandmerge':['tools/*']}
 )
