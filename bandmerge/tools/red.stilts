@@ -1,12 +1,10 @@
 #rename and fill in RA and DEC if they are not provided by the first table
-
 replacecol RA "NULL_RA?RA_r_2:RA"
 replacecol RA "NULL_RA?RA_i_1:RA"
 replacecol RA "NULL_RA?RA_i_2:RA"
 replacecol RA "NULL_RA?RA_Ha_1:RA"
 replacecol RA "NULL_RA?RA_Ha_2:RA"
 replacecol RA "NULL_RA?RA_Ha_3:RA"
-
 replacecol DEC "NULL_DEC?DEC_r_2:DEC"
 replacecol DEC "NULL_DEC?DEC_i_1:DEC"
 replacecol DEC "NULL_DEC?DEC_i_2:DEC"
