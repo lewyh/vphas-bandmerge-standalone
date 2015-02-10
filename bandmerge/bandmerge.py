@@ -13,15 +13,14 @@ import os
 
 __author__ = 'hfarnhill'
 description = '''
-Convert VPHAS+ source lists obtained from the ESO archive into band-merged catalogues.
-
-This script produces single-band catalogues prior to the
-bandmerging, which can also be used for working in s
-(i.e. ignore the bandmerging step), produce both single-band
-and band-merged catalogues, or only a band-merged catalogue.
+Convert VPHAS+ source lists obtained from the ESO archive into
+band-merged catalogues.
 
 Either a list of files, or a directory path which contains only
 the files to be bandmerged should be provided.
+
+The script produces single-band catalogues prior to the
+bandmerging, which can be kept by using the -k flag.
 
 The radii of apertures used to measure flux from VPHAS+ images
 are defined relative to a "core" radius of 1 arcsecond. For
