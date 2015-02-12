@@ -457,7 +457,7 @@ def process(args=None):
                         help='Aperture # for measuring flux. Default = 3.')
     parser.add_argument('-r', action='store', nargs=1, dest='radius', default=[0.5], type=float,
                         help='Crossmatching radius (arcsec). Default = 0.5.')
-    parser.add_argument('-x', action='store', nargs=1, dest='xmx', default=2048, type=int,
+    parser.add_argument('-x', action='store', nargs=1, dest='xmx', default=[2048], type=int,
                         help='Memory (in MB) for crossmatching. Default = 2048.')
     parser.add_argument('-k', action='store_true', dest='keep', default=False,
                         help='Keep intermediate single-band catalogues.')
@@ -475,6 +475,6 @@ def process(args=None):
 
     if args.files is None and args.dir is not None:
         filelist = glob.glob("{0}*.fits".format(args.dir[0]))
-        runmerge(filelist, args.radius[0], args.aperture[0], args.xmx, args.keep, args.nomerge, args.clobber)
+        runmerge(filelist, args.radius[0], args.aperture[0], args.xmx[0], args.keep, args.nomerge, args.clobber)
     elif args.files is not None and args.dir is None:
-        runmerge(args.files, args.radius[0], args.aperture[0], args.xmx, args.keep, args.nomerge, args.clobber)
+        runmerge(args.files, args.radius[0], args.aperture[0], args.xmx[0], args.keep, args.nomerge, args.clobber)
